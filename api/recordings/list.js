@@ -3,7 +3,10 @@ import { kv } from "@vercel/kv";
 
 function getAdminIds() {
   const raw = process.env.WHOP_ADMIN_USER_IDS || "";
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function extractUserId(result) {
@@ -52,38 +55,35 @@ export default async function handler(req, res) {
   try {
     const viewer = await verifyWhop(req);
 
+    // Pull up to 200 newest
     const raw = await kv.lrange("recordings", 0, 200);
-
     const parsed = raw
       .map((r) => {
-        if (typeof r === "string") {
-          try {
-            return JSON.parse(r);
-          } catch {
-            return null;
-          }
+        try {
+          return JSON.parse(r);
+        } catch {
+          return null;
         }
-        if (typeof r === "object" && r !== null) return r;
-        return null;
       })
       .filter(Boolean);
 
-    const items = parsed.map((item) => {
-      const ownerUserId = item.ownerUserId || item.userId || item.ownerId || null;
-      const isOwner = ownerUserId && ownerUserId === viewer.userId;
+    // Admin sees all; non-admin sees only own items
+    const items = viewer.isAdmin
+      ? parsed
+      : parsed.filter((it) => it.ownerUserId === viewer.userId);
 
-      return {
-        ...item,
-        ownerUserId,
-        canDelete: Boolean(viewer.isAdmin || isOwner),
-      };
+    // Sort newest first (in case list order got weird)
+    items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    return res.status(200).json({
+      ok: true,
+      viewer: { userId: viewer.userId, isAdmin: viewer.isAdmin },
+      items
     });
-
-    return res.status(200).json({ ok: true, viewer, items });
-  } catch (e) {
+  } catch (err) {
     return res.status(401).json({
       ok: false,
-      error: e?.message || "Failed to load recordings",
+      error: err?.message || "Unauthorized"
     });
   }
 }
