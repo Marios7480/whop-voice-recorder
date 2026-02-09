@@ -1,37 +1,38 @@
+// src/pages/LibraryPage.jsx  (FULL REPLACEMENT WITH ADMIN DELETE UI)
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 export default function LibraryPage() {
   const [items, setItems] = useState([]);
-  const [viewerId, setViewerId] = useState("");
-  const [adminIds, setAdminIds] = useState("");
+  const [me, setMe] = useState({ userId: "", isAdmin: false });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // Optional: let the UI know who "me" is by reading cookie (works only in Whop iframe)
-  useEffect(() => {
-    try {
-      const cookies = document.cookie.split(";").map((c) => c.trim());
-      const row = cookies.find((c) => c.startsWith("whop-core.user-id="));
-      if (row) setViewerId(decodeURIComponent(row.split("=").slice(1).join("=")));
-    } catch {
-      // ignore
-    }
-  }, []);
+  async function loadMe() {
+    const res = await fetch("/api/me", { method: "GET" });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || "Failed to load /api/me");
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "Failed to load /api/me");
+    return { userId: data.userId, isAdmin: !!data.isAdmin };
+  }
+
+  async function loadList() {
+    const res = await fetch("/api/recordings/list", { method: "GET" });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || "Failed to load recordings");
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "Failed to load recordings");
+    return Array.isArray(data.items) ? data.items : [];
+  }
 
   async function load() {
     setError("");
     setLoading(true);
-
     try {
-      const res = await fetch("/api/recordings/list", { method: "GET" });
-      const text = await res.text();
-      if (!res.ok) throw new Error(text || "Failed to load");
-
-      const data = JSON.parse(text);
-      if (!data.ok) throw new Error(data.error || "Failed to load");
-
-      setItems(Array.isArray(data.items) ? data.items : []);
+      const [meInfo, list] = await Promise.all([loadMe(), loadList()]);
+      setMe(meInfo);
+      setItems(list);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -68,25 +69,28 @@ export default function LibraryPage() {
     }
   }
 
-  // You said: Admins delete any; Users delete only their own.
-  // We can’t reliably know “admin” on the client without an API, but we CAN enforce server-side.
-  // UI only shows delete button when owner == viewerId. Admin will still be able to delete via UI
-  // if you want—tell me and I’ll add an /api/me endpoint to expose isAdmin safely.
+  // UI policy:
+  // - Admin: can delete anyone (show button for all)
+  // - User: can delete only their own (show button only when owner matches)
   function canShowDelete(item) {
-    if (!viewerId) return false;
-    return item.ownerUserId === viewerId;
+    if (me.isAdmin) return true;
+    if (!me.userId) return false;
+    return item.ownerUserId === me.userId;
   }
 
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
-        <Link to="/record">Record</Link>
-        {"  "}
-        <strong>Library</strong>
+        <Link to="/record">Record</Link>{" "}
+        <strong style={{ marginLeft: 8 }}>Library</strong>
       </div>
 
       <h1>Library</h1>
-      <p>Everyone can view all recordings. You can delete your own recordings.</p>
+
+      <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 12 }}>
+        Signed in as: <code>{me.userId || "unknown"}</code>{" "}
+        {me.isAdmin ? "(admin)" : ""}
+      </div>
 
       {loading && <p>Loading…</p>}
       {error && <p style={{ color: "red" }}>{error}</p>}
@@ -105,16 +109,17 @@ export default function LibraryPage() {
             </div>
 
             {r.url ? (
-              <audio controls src={r.url} style={{ marginTop: 8, display: "block" }} />
+              <audio
+                controls
+                src={r.url}
+                style={{ marginTop: 8, display: "block" }}
+              />
             ) : (
               <p style={{ marginTop: 8 }}>Missing audio URL</p>
             )}
 
             {canShowDelete(r) && (
-              <button
-                style={{ marginTop: 8 }}
-                onClick={() => deleteRecording(r.id)}
-              >
+              <button style={{ marginTop: 8 }} onClick={() => deleteRecording(r.id)}>
                 🗑 Delete
               </button>
             )}

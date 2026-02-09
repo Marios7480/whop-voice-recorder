@@ -1,6 +1,7 @@
+// api/recordings/delete.js
 import { kv } from "@vercel/kv";
-import { del as delBlob } from "@vercel/blob";
-import { verifyWhopFromHeaders } from "./_auth.js";
+import { del } from "@vercel/blob";
+import { getViewer } from "../_utils/whop.js";
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
@@ -9,50 +10,37 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
-  let viewer;
   try {
-    viewer = verifyWhopFromHeaders(req);
-  } catch (e) {
-    return res.status(401).json({ ok: false, error: e?.message || "Unauthorized" });
-  }
+    const viewer = getViewer(req);
 
-  try {
     const { id } = req.body || {};
     if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
 
+    // Load all recordings, find target
     const raw = await kv.lrange("recordings", 0, 500);
-
     const parsed = raw
       .map((r) => {
-        if (typeof r === "string") {
-          try { return JSON.parse(r); } catch { return null; }
+        try {
+          return JSON.parse(r);
+        } catch {
+          return null;
         }
-        if (typeof r === "object" && r !== null) return r;
-        return null;
       })
       .filter(Boolean);
 
-    const item = parsed.find((x) => x.id === id);
-    if (!item) return res.status(404).json({ ok: false, error: "Not found" });
+    const target = parsed.find((x) => x.id === id);
+    if (!target) return res.status(404).json({ ok: false, error: "Not found" });
 
-    const ownerUserId = item.ownerUserId || item.userId || item.ownerId || null;
-    const isOwner = ownerUserId && ownerUserId === viewer.userId;
+    const isOwner = target.ownerUserId === viewer.userId;
 
+    // POLICY:
+    // - Admin: delete any
+    // - User: delete only own
     if (!viewer.isAdmin && !isOwner) {
-      return res.status(403).json({
-        ok: false,
-        error: "Forbidden: you can only delete your own recordings.",
-      });
+      return res.status(403).json({ ok: false, error: "Not allowed" });
     }
 
-    if (item.url) {
-      try {
-        await delBlob(item.url);
-      } catch {
-        // ignore blob deletion error; still delete metadata
-      }
-    }
-
+    // Remove from KV list (filter + rewrite)
     const remaining = parsed.filter((x) => x.id !== id);
 
     await kv.del("recordings");
@@ -60,9 +48,19 @@ export default async function handler(req, res) {
       await kv.rpush("recordings", ...remaining.map((x) => JSON.stringify(x)));
     }
 
-    return res.status(200).json({ ok: true, deletedId: id });
+    // Delete blob if present
+    if (target.url) {
+      try {
+        await del(target.url);
+      } catch {
+        // ignore blob delete failure so KV delete still works
+      }
+    }
+
+    return res.status(200).json({ ok: true });
   } catch (err) {
-    return res.status(500).json({
+    const status = err?.statusCode || 500;
+    return res.status(status).json({
       ok: false,
       error: err?.message || "Delete failed",
     });

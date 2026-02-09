@@ -1,5 +1,6 @@
+// api/recordings/list.js
 import { kv } from "@vercel/kv";
-import { verifyWhopFromHeaders } from "./_auth.js";
+import { getViewer } from "../_utils/whop.js";
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
@@ -8,40 +9,26 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
-  let viewer;
   try {
-    viewer = verifyWhopFromHeaders(req);
-  } catch (e) {
-    return res.status(401).json({ ok: false, error: e?.message || "Unauthorized" });
-  }
+    // Auth required (must be inside Whop iframe so cookie exists)
+    getViewer(req);
 
-  try {
-    const raw = await kv.lrange("recordings", 0, 200);
-
-    const parsed = raw
+    // PUBLIC FEED: return all recordings to everyone
+    const raw = await kv.lrange("recordings", 0, 200); // adjust count if you want
+    const items = raw
       .map((r) => {
-        if (typeof r === "string") {
-          try { return JSON.parse(r); } catch { return null; }
+        try {
+          return JSON.parse(r);
+        } catch {
+          return null;
         }
-        if (typeof r === "object" && r !== null) return r;
-        return null;
       })
       .filter(Boolean);
 
-    const items = parsed.map((item) => {
-      const ownerUserId = item.ownerUserId || item.userId || item.ownerId || null;
-      const isOwner = ownerUserId && ownerUserId === viewer.userId;
-
-      return {
-        ...item,
-        ownerUserId,
-        canDelete: Boolean(viewer.isAdmin || isOwner),
-      };
-    });
-
-    return res.status(200).json({ ok: true, viewer, items });
+    return res.status(200).json({ ok: true, items });
   } catch (err) {
-    return res.status(500).json({
+    const status = err?.statusCode || 500;
+    return res.status(status).json({
       ok: false,
       error: err?.message || "Failed to load recordings",
     });
