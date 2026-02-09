@@ -1,20 +1,13 @@
-// api/recordings/list.js
 import { kv } from "@vercel/kv";
-import { getViewer } from "../_utils/whop.js";
+import { requireViewer } from "../_lib/whop.js";
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
 
-  if (req.method !== "GET") {
-    return res.status(405).json({ ok: false, error: "Method not allowed" });
-  }
-
   try {
-    // Auth required (must be inside Whop iframe so cookie exists)
-    getViewer(req);
+    const viewer = requireViewer(req);
 
-    // PUBLIC FEED: return all recordings to everyone
-    const raw = await kv.lrange("recordings", 0, 200); // adjust count if you want
+    const raw = await kv.lrange("recordings", 0, 200);
     const items = raw
       .map((r) => {
         try {
@@ -25,12 +18,19 @@ export default async function handler(req, res) {
       })
       .filter(Boolean);
 
-    return res.status(200).json({ ok: true, items });
+    return res.status(200).json({
+      ok: true,
+      viewer: {
+        userId: viewer.userId,
+        name: viewer.name || null,
+        isAdmin: viewer.isAdmin,
+      },
+      items,
+    });
   } catch (err) {
-    const status = err?.statusCode || 500;
-    return res.status(status).json({
+    return res.status(err.statusCode || 500).json({
       ok: false,
-      error: err?.message || "Failed to load recordings",
+      error: err.message || "Failed to load recordings",
     });
   }
 }

@@ -1,25 +1,22 @@
 // api/me.js
-import { getViewer } from "./_utils/whop.js";
+import { requireViewer } from "./_lib/whop.js";
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
 
-  if (req.method !== "GET") {
-    return res.status(405).json({ ok: false, error: "Method not allowed" });
-  }
-
   try {
-    const viewer = getViewer(req);
+    const viewer = requireViewer(req);
+
     return res.status(200).json({
       ok: true,
       userId: viewer.userId,
+      name: viewer.name || null,
       isAdmin: viewer.isAdmin,
     });
   } catch (err) {
-    const status = err?.statusCode || 401;
-    return res.status(status).json({
+    return res.status(err.statusCode || 500).json({
       ok: false,
-      error: err?.message || "Unauthorized",
+      error: err.message || "Failed",
     });
   }
 }
