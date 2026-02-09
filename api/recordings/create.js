@@ -1,52 +1,12 @@
-import Whop from "@whop/sdk";
 import { put } from "@vercel/blob";
 import { kv } from "@vercel/kv";
 import Busboy from "busboy";
+import crypto from "crypto";
+import { verifyWhopFromHeaders } from "./_auth.js";
 
 export const config = {
   api: { bodyParser: false },
 };
-
-function getAdminIds() {
-  const raw = process.env.WHOP_ADMIN_USER_IDS || "";
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
-}
-
-function extractUserId(result) {
-  return (
-    result?.userId ||
-    result?.user_id ||
-    result?.user?.id ||
-    result?.user?.userId ||
-    result?.id ||
-    null
-  );
-}
-
-async function verifyWhop(req) {
-  const appId = process.env.WHOP_APP_ID;
-  const apiKey = process.env.WHOP_API_KEY;
-  if (!appId || !apiKey) throw new Error("Missing WHOP_APP_ID or WHOP_API_KEY");
-
-  const whop = new Whop({ appId, apiKey });
-
-  let result;
-  try {
-    result = await whop.verifyUserToken(req);
-  } catch (e1) {
-    try {
-      result = await whop.verifyUserToken(req.headers);
-    } catch (e2) {
-      result = await whop.verifyUserToken({ headers: req.headers });
-    }
-  }
-
-  const userId = extractUserId(result);
-  if (!userId) throw new Error("Unauthorized (no userId)");
-
-  const isAdmin = getAdminIds().includes(userId);
-  return { userId, isAdmin };
-}
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
@@ -55,9 +15,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
+  let viewer;
   try {
-    const viewer = await verifyWhop(req);
+    viewer = verifyWhopFromHeaders(req);
+  } catch (e) {
+    return res.status(401).json({ ok: false, error: e?.message || "Unauthorized" });
+  }
 
+  try {
     const bb = Busboy({ headers: req.headers });
 
     let title = "";
@@ -78,13 +43,12 @@ export default async function handler(req, res) {
     });
 
     bb.on("finish", async () => {
-      if (!audioBuffer) {
-        return res.status(400).json({ ok: false, error: "No audio uploaded" });
-      }
-
       const cleanTitle = (title || "").trim();
       if (!cleanTitle) {
         return res.status(400).json({ ok: false, error: "Title is required" });
+      }
+      if (!audioBuffer || !audioBuffer.length) {
+        return res.status(400).json({ ok: false, error: "No audio uploaded" });
       }
 
       const id = crypto.randomUUID();
@@ -100,7 +64,7 @@ export default async function handler(req, res) {
         title: cleanTitle,
         createdAt,
         url: blob.url,
-        ownerUserId: viewer.userId, // ✅ key piece
+        ownerUserId: viewer.userId
       };
 
       await kv.lpush("recordings", JSON.stringify(item));
@@ -110,7 +74,7 @@ export default async function handler(req, res) {
 
     req.pipe(bb);
   } catch (err) {
-    return res.status(401).json({
+    return res.status(500).json({
       ok: false,
       error: err?.message || "Upload failed",
     });

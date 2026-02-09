@@ -1,47 +1,6 @@
-import Whop from "@whop/sdk";
 import { kv } from "@vercel/kv";
 import { del as delBlob } from "@vercel/blob";
-
-function getAdminIds() {
-  const raw = process.env.WHOP_ADMIN_USER_IDS || "";
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
-}
-
-function extractUserId(result) {
-  return (
-    result?.userId ||
-    result?.user_id ||
-    result?.user?.id ||
-    result?.user?.userId ||
-    result?.id ||
-    null
-  );
-}
-
-async function verifyWhop(req) {
-  const appId = process.env.WHOP_APP_ID;
-  const apiKey = process.env.WHOP_API_KEY;
-  if (!appId || !apiKey) throw new Error("Missing WHOP_APP_ID or WHOP_API_KEY");
-
-  const whop = new Whop({ appId, apiKey });
-
-  let result;
-  try {
-    result = await whop.verifyUserToken(req);
-  } catch (e1) {
-    try {
-      result = await whop.verifyUserToken(req.headers);
-    } catch (e2) {
-      result = await whop.verifyUserToken({ headers: req.headers });
-    }
-  }
-
-  const userId = extractUserId(result);
-  if (!userId) throw new Error("Unauthorized (no userId)");
-
-  const isAdmin = getAdminIds().includes(userId);
-  return { userId, isAdmin };
-}
+import { verifyWhopFromHeaders } from "./_auth.js";
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
@@ -50,9 +9,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
+  let viewer;
   try {
-    const viewer = await verifyWhop(req);
+    viewer = verifyWhopFromHeaders(req);
+  } catch (e) {
+    return res.status(401).json({ ok: false, error: e?.message || "Unauthorized" });
+  }
 
+  try {
     const { id } = req.body || {};
     if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
 
@@ -61,11 +25,7 @@ export default async function handler(req, res) {
     const parsed = raw
       .map((r) => {
         if (typeof r === "string") {
-          try {
-            return JSON.parse(r);
-          } catch {
-            return null;
-          }
+          try { return JSON.parse(r); } catch { return null; }
         }
         if (typeof r === "object" && r !== null) return r;
         return null;
@@ -85,12 +45,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // Delete blob file (best-effort)
     if (item.url) {
       try {
         await delBlob(item.url);
       } catch {
-        // ignore; still delete from KV
+        // ignore blob deletion error; still delete metadata
       }
     }
 
@@ -102,10 +61,10 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json({ ok: true, deletedId: id });
-  } catch (e) {
+  } catch (err) {
     return res.status(500).json({
       ok: false,
-      error: e?.message || "Delete failed",
+      error: err?.message || "Delete failed",
     });
   }
 }
