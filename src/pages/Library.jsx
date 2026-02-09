@@ -40,8 +40,8 @@ export default function Library() {
   }
 
   async function shareRecording(r) {
-    // ✅ This is the simplest Whop share: a public URL to the audio file
-    const shareText = `${r.title}\nRecorded by: ${r.ownerName || "Unknown"}\n${r.url}`;
+    const shareUrl = `${window.location.origin}/share/${r.id}`;
+    const shareText = `${r.title}\nRecorded by: ${r.ownerName || "Unknown"}\n${shareUrl}`;
     try {
       await navigator.clipboard.writeText(shareText);
       alert("Share text copied (paste into Whop).");
@@ -87,6 +87,10 @@ export default function Library() {
 
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button onClick={() => shareRecording(r)}>Share</button>
+
+                <Link to={`/share/${r.id}`}>
+                  <button>View</button>
+                </Link>
 
                 {r.canDelete ? (
                   <button onClick={() => deleteRecording(r.id)}>Delete</button>
